@@ -1,26 +1,53 @@
-import pickle
+import os
+import pydicom as dcm
 import numpy as np
-import tensorflow as tf
-from skimage.measure import compare_mse, compare_nrmse, compare_ssim, compare_psnr
+from skimage.measure import compare_mse, compare_nrmse, compare_psnr, compare_ssim
 
 
-def ckpt_to_numpy(checkpoint_dir, save_name = 'tmp_generate_weight'):
-    v_names = ['conv1', 'conv2', 'conv3', 'conv4', 'conv5', 'deconv1', 'deconv2', 'deconv3', 'deconv4', 'deconv5']
+def slices_stack(index, source_path):
+    """
+    :param index: index of start slice
+    :param source_path: path of the folder stored dicom files
+    :return: np.array (9, 256, 256, 1)
+    """
+    slices = []
+    for i in range(index-8, index+1):
+        slices.append(dcm.read_file(os.path.join(source_path, str(i)+'.dcm')).pixel_array)
+    slices = np.array(slices)
+    slices = np.expand_dims(slices, axis=-1)
+    return slices
 
-    weights = dict()
-    with tf.Session() as sess:
-        for var_name, _ in tf.contrib.framework.list_variables(checkpoint_dir):
-            var_name_list = var_name.split('/')
-            if len(var_name_list) == 3 and var_name_list[0] == 'generator':
-                weights[var_name_list[1]] = tf.contrib.framework.load_variable(checkpoint_dir, var_name)
 
-    pickle.dump(weights, open(save_name, 'wb'))
-    return save_name
+def get_patches(index, input_store_path, label_store_path, input_array, label_array):
+    """
+    :param index: start index of patches
+    :param input_store_path: store folder path of input patches
+    :param label_store_path: store folder path of label patches
+    :param input_array: input array (9, 256, 256, 1)
+    :param label_array: label array (9, 256, 256, 1)
+    :param patch_size: patch size
+    :param stride: patch window stride
+    :return: end index of patches
+    """
+    init_center_x = 64 // 2 - 1
+    init_center_y = 64 // 2 - 1
+    num_zeros = input_array.shape[0] * 64 * 64 * 0.8
+    for coordinate_y in range(init_center_y, input_array.shape[1] - 64 // 2, 16):
+        for coordinate_x in range(init_center_x, input_array.shape[1] - 64 // 2, 16):
+            input_patch = input_array[:, coordinate_x - 31: coordinate_x + 33, coordinate_y - 31: coordinate_y + 33, :]
+            label_patch = label_array[:, coordinate_x - 31: coordinate_x + 33, coordinate_y - 31: coordinate_y + 33, :]
+            if np.sum(input_patch == 0) > num_zeros or np.sum(label_patch == 0) > num_zeros:
+                pass
+            else:
+                np.save(os.path.join(input_store_path, str(index) + '.npy'), input_patch)
+                np.save(os.path.join(label_store_path, str(index) + '.npy'), label_patch)
+                index += 1
+    return index
 
 
 def normalization(array, model):
     """
-    :param array: array (N, 9, 64, 64, 1)
+    :param array: array (N, 64, 64, 1)
     :param model: 1 - [0, 1], 2 - [0, 4.515]
     :return: normalized array
     """
